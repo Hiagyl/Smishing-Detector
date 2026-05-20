@@ -1,4 +1,5 @@
 # src/preprocessing/text_cleaner.py
+from config.threat_keywords import URGENCY_WORDS
 import re
 import pandas as pd
 
@@ -8,8 +9,8 @@ class SmishingFeatureExtractor:
         self.url_pattern = re.compile(
             r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
         )
-        self.urgency_words = ['voucher', 'congratulations', 'locked',
-                              'winner', 'urgent', 'account', 'verify', 'nanalo']
+        # self.urgency_words = ['voucher', 'congratulations', 'locked',
+        #                       'winner', 'urgent', 'account', 'verify', 'nanalo']
 
     def extract_meta_features(self, df):
         """Extracts engineered metadata signals from the text and sender columns."""
@@ -23,9 +24,9 @@ class SmishingFeatureExtractor:
             lambda x: 1 if self.url_pattern.search(str(x)) else 0)
 
         # 3. Urgency Phrasing Density Scores
-        df['urgency_score'] = df['text'].apply(
+        df["urgency_score"] = df["text"].apply(
             lambda x: sum(
-                1 for word in self.urgency_words if word in str(x).lower())
+                1 for word in URGENCY_WORDS if word in str(x).lower())
         )
 
         # 4. Temporal Hour Extraction
