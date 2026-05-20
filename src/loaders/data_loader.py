@@ -1,88 +1,78 @@
 # src/loaders/data_loader.py
 import os
-import shutil
-import kagglehub
+import re
 import pandas as pd
+import kagglehub
+from kagglehub import KaggleDatasetAdapter
 
 
-def download_and_organize_raw_data():
-    """
-    Downloads the two PH-specific smishing datasets using kagglehub
-    and organizes them into data/1_raw/ for Git tracking.
-    """
-    raw_dir = "data/1_raw"
-    os.makedirs(raw_dir, exist_ok=True)
+def transform_sender_to_category(sender):
+    """Categorizes the sender based on strings, privacy markers, and lengths."""
+    s = str(sender).strip().lower()
+    masked_and_digits = re.sub(r'[^0-9*]', '', s)
 
-    # --- DATASET 1: Philippine Spam SMS Messages ---
-    print("📥 Fetching Dataset 1 (bwandowando/philippine-spam-sms-messages)...")
-    path_1 = kagglehub.dataset_download(
-        "bwandowando/philippine-spam-sms-messages")
-
-    for file in os.listdir(path_1):
-        if file.endswith('.csv'):
-            shutil.copy(os.path.join(path_1, file), os.path.join(
-                raw_dir, "ph_spam_dataset_1.csv"))
-            print("✅ Dataset 1 saved as 'ph_spam_dataset_1.csv'")
-
-    # --- DATASET 2: PH Spam & Marketing SMS ---
-    print("📥 Fetching Dataset 2 (scottleechua/ph-spam-marketing-sms-w-timestamps)...")
-    path_2 = kagglehub.dataset_download(
-        "scottleechua/ph-spam-marketing-sms-w-timestamps")
-
-    for file in os.listdir(path_2):
-        if file.endswith('.csv'):
-            shutil.copy(os.path.join(path_2, file), os.path.join(
-                raw_dir, "ph_spam_dataset_2.csv"))
-            print("✅ Dataset 2 saved as 'ph_spam_dataset_2.csv'")
-
-    print(f"\n🎉 Raw storage preparation complete inside: {raw_dir}")
+    if "redacted_individual" in s or "redacted_business" in s:
+        return "Personal_Mobile"
+    if s in ["unknown", "hidden", "private"]:
+        return "Anonymized_Sender"
+    if len(masked_and_digits) >= 10:
+        return "Personal_Mobile"
+    if masked_and_digits and len(masked_and_digits) < 10:
+        return "Short_Code"
+    if any(char.isalpha() for char in s):
+        return "Verified_Brand"
+    return "Unknown"
 
 
-def combine_and_save_datasets():
-    """
-    Reads the two raw local CSV files, unifies their columns/schemas,
-    combines them, drops duplicates, and saves the file to data/2_interim/.
-    """
-    print("\n🔄 Initializing data merging pipeline...")
+def load_and_combine_ph_data():
+    """Downloads, merges, prunes redactions, and labels the PH datasets."""
+    print("📥 Loading Dataset 1 (bwandowando)...")
+    df1 = kagglehub.dataset_load(
+        KaggleDatasetAdapter.PANDAS,
+        "bwandowando/philippine-spam-sms-messages",
+        "SPAM_SMS.csv"
+    )
+    # Align and label df1
+    df1['category'] = 'smishing'
+    df1 = df1.rename(columns={'date': 'date-received',
+                     'masked_celphone_number': 'sender'})
 
-    # 1. Process Dataset One
-    # (Note: bwandowando's dataset generally uses columns like 'text' and 'label')
-    df1 = pd.read_csv("data/1_raw/ph_spam_dataset_1.csv",
-                      encoding='utf-8', errors='ignore')
-    # Standardize column selection. Swap names below if your columns vary!
-    df1 = df1[['text', 'label']]
+    print("📥 Loading Dataset 2 (scottleechua)...")
+    df2 = kagglehub.dataset_load(
+        KaggleDatasetAdapter.PANDAS,
+        "scottleechua/ph-spam-marketing-sms-w-timestamps",
+        "text-messages.csv"
+    )
 
-    # 2. Process Dataset Two
-    # (Note: scottleechua's dataset has columns like 'text', 'label', 'timestamp')
-    df2 = pd.read_csv("data/1_raw/ph_spam_dataset_2.csv",
-                      encoding='utf-8', errors='ignore')
-    df2 = df2[['text', 'label']]  # Drop timestamp to match df1 schema
+    # 1. Filter columns to ensure structural matching before stacking
+    keep_cols = ['text', 'category', 'date-received', 'sender']
+    df1_filtered = df1[keep_cols].copy()
+    df2_filtered = df2[keep_cols].copy()
 
-    # 3. Concatenate datasets
-    combined_df = pd.concat([df1, df2], ignore_index=True)
+    # 2. Combine DataFrames
+    combined_df = pd.concat([df2_filtered, df1_filtered], ignore_index=True)
 
-    # 4. Standardize labels to integers: 0 = Ham, 1 = Spam/Smishing
-    # Handles strings like 'spam', 'ham', 'Spam', 'Ham'
-    combined_df['label'] = combined_df['label'].astype(
-        str).str.lower().str.strip()
-    combined_df['label'] = combined_df['label'].map(
-        {'ham': 0, 'spam': 1, 'smishing': 1})
+    # 3. Prune complete redactions that leak no textual signal
+    df_filtered = combined_df[combined_df['text'] != '<REDACTED>'].copy()
+    df_filtered = df_filtered[df_filtered['text'].notna()]
 
-    # Clean up rows that failed mapping or have missing values
-    combined_df = combined_df.dropna(subset=['text', 'label'])
-    combined_df['label'] = combined_df['label'].astype(int)
+    # 4. Standardize text categories ('spam' -> 'smishing')
+    df_filtered['category'] = df_filtered['category'].replace(
+        'spam', 'smishing')
 
-    # 5. Drop exact message duplicates across datasets
-    initial_len = len(combined_df)
-    combined_df = combined_df.drop_duplicates(subset=['text'])
-    print(
-        f"✂️ Removed {initial_len - len(combined_df)} duplicate cross-over rows.")
+    # 5. Transform Senders
+    df_filtered['sender_category'] = df_filtered['sender'].apply(
+        transform_sender_to_category)
 
-    # 6. Save combined output
-    interim_path = "data/2_interim/combined_raw_sms.csv"
-    os.makedirs(os.path.dirname(interim_path), exist_ok=True)
-    combined_df.to_csv(interim_path, index=False)
+    # 6. Map target variables to strict binary integers
+    # 1 = Smishing, 0 = Safe (Ads, Gov, OTP, Personal)
+    mapping = {'smishing': 1, 'ads': 0, 'gov': 0, 'otp': 0, 'personal': 0}
+    df_filtered['label'] = df_filtered['category'].str.lower(
+    ).str.strip().map(mapping).fillna(0).astype(int)
 
-    print(
-        f"🏁 Clean merge successful! Dataset saved to {interim_path} ({len(combined_df)} total rows).")
-    return combined_df
+    # Save a local cache snapshot to interim data registry
+    os.makedirs("data/2_interim", exist_ok=True)
+    df_filtered.to_csv("data/2_interim/combined_raw_sms.csv", index=False)
+    print(f"🏁 Data Ingestion Complete! Merged shape: {df_filtered.shape}")
+
+    return df_filtered
