@@ -8,7 +8,8 @@ class SmishingTfidfVectorizer:
     def __init__(self, max_features=10000, ngram_range=(1, 2)):
         self.vectorizer = TfidfVectorizer(
             ngram_range=ngram_range,
-            max_features=max_features
+            max_features=max_features,
+            stop_words='english'
         )
 
     def fit_transform(self, train_text):

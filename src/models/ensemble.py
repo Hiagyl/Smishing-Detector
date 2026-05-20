@@ -5,6 +5,8 @@ import pandas as pd
 from sklearn.model_selection import cross_val_predict
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from xgboost import XGBClassifier
+import os
+import joblib
 
 
 def evaluate_all_stacked_combinations(base_models, y_train, y_test):
@@ -72,3 +74,38 @@ def evaluate_all_stacked_combinations(base_models, y_train, y_test):
 
     print("\n🎉 All combinations evaluated successfully!")
     return stacked_results_df, train_probs, test_probs
+
+
+def train_and_save_champion(stacked_results_df, train_probs, test_probs, y_train, filepath="saved_models/champion_ensemble.pkl"):
+    """
+    Identifies the highest-performing model combination from the grid search,
+    re-trains its specific XGBoost meta-classifier layer, and pickles it to disk.
+    """
+    # 1. Identify the champion configuration names from the top row
+    champion_row = stacked_results_df.iloc[0]
+    champion_combo_name = champion_row["Combination"]
+    combo_models = champion_combo_name.split(" + ")
+
+    print(f"\n🏆 Champion Combination Identified: {champion_combo_name}")
+    print(f"🥇 Validation F1-Score: {champion_row['F1-Score']:.4f}")
+
+    # 2. Re-stack the exact subset of probabilities that won
+    meta_X_train_sub = np.column_stack([train_probs[m] for m in combo_models])
+
+    # 3. Train the final production model instance
+    champion_meta_clf = XGBClassifier(
+        objective="binary:logistic",
+        eval_metric="logloss",
+        random_state=42
+    )
+    print("🏋️ Freezing final meta-classifier parameters...")
+    champion_meta_clf.fit(meta_X_train_sub, y_train)
+
+    # 4. Export the artifact using joblib
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    joblib.dump(champion_meta_clf, filepath)
+    print(
+        f"📦 Success! Champion ensemble model pickled directly to: {filepath}")
+
+    # Return the models list so the frontend knows which base models to run
+    return combo_models
