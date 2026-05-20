@@ -71,4 +71,4 @@ def evaluate_all_stacked_combinations(base_models, y_train, y_test):
     ).reset_index(drop=True)
 
     print("\n🎉 All combinations evaluated successfully!")
-    return stacked_results_df
+    return stacked_results_df, train_probs, test_probs
