@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from src.loaders.data_loader import transform_sender_to_category
+from src.preprocessing.text_cleaner import SmishingFeatureExtractor
 
 # ==============================================================================
 # STEP 3: APPLICATION FRONTEND INTERFACE DESIGN
@@ -97,7 +98,7 @@ if st.button("🛡️ Launch Multi-Layer Threat Scan"):
         with st.spinner("Processing structural features and conducting multi-model passes..."):
             
             # ------------------------------------------------------------------
-            # LAYER A: Live Feature Extraction & Schema Alignment (FIXED)
+            # LAYER A: Live Feature Extraction & Schema Alignment
             # ------------------------------------------------------------------
             new_df = pd.DataFrame({
                 "text": [sms_input],
@@ -105,7 +106,8 @@ if st.button("🛡️ Launch Multi-Layer Threat Scan"):
                 "date-received": [date_input]
             })
             
-            # Form structural metadata values safely
+            # Form metadata profiles matching your exact training pipeline math
+            new_df["sender_category"] = new_df["sender"].apply(transform_sender_to_category)
             new_df["text_len"] = new_df["text"].apply(len)
             
             url_pattern = r"(http[s]?://\S+|www\.\S+|bit\.ly/\S+|tinyurl\.com/\S+|t\.co/\S+)"
@@ -117,27 +119,23 @@ if st.button("🛡️ Launch Multi-Layer Threat Scan"):
             new_df["date-received"] = pd.to_datetime(new_df["date-received"], errors="coerce")
             new_df["hour_received"] = new_df["date-received"].dt.hour.fillna(0).astype(int)
             
-            # Explicit One-Hot Flag Assignment (Avoids get_dummies ordering bugs)
-            sender_cat = str(transform_sender_to_category(sender_input)).lower()
+            # One-Hot Encoding Alignment Mapping
+            new_df = pd.get_dummies(new_df, columns=["sender_category"], prefix="sc")
+            new_df.columns = [c.lower() for c in new_df.columns]
             
-            new_df["sc_personal_mobile"] = 0
-            new_df["sc_short_code"] = 0
-            new_df["sc_verified_brand"] = 0
+            # Pad missing schema keys with zero to maintain column positions
+            for col in meta_columns:
+                if col not in new_df.columns:
+                    new_df[col] = 0
             
-            if "personal" in sender_cat or "mobile" in sender_cat:
-                new_df["sc_personal_mobile"] = 1
-            elif "short" in sender_cat:
-                new_df["sc_short_code"] = 1
-            elif "brand" in sender_cat or "verified" in sender_cat:
-                new_df["sc_verified_brand"] = 1
-            
-            # Extract clean aligned numpy matrix slices
+            # Separate processed spaces out into pure numpy values for estimators
             new_X_meta = new_df[meta_columns].values
             new_X_text = vectorizer.transform(new_df["text"])
             
             # ------------------------------------------------------------------
             # LAYER B: EXECUTE LAYER 1 BASE MODEL INFERENCE
             # ------------------------------------------------------------------
+            # Calculate actual mathematical probabilities from your trained components
             probs = {
                 "SVM": base_models["SVM"].predict_proba(new_X_text)[0, 1],
                 "LR": base_models["LR"].predict_proba(new_X_text)[0, 1],
@@ -147,41 +145,32 @@ if st.button("🛡️ Launch Multi-Layer Threat Scan"):
             }
             
             # ------------------------------------------------------------------
-            # LAYER C: PRODUCTION CONSENSUS ENSEMBLE ENGINE (STABLE FIXED)
+            # LAYER C: EXECUTE LAYER 2 META MODEL STACKING PASS
             # ------------------------------------------------------------------
-            # We assign weighted authority based on individual validation strengths:
-            # Your specialized text engines (SVM, NB) carry the highest weight for body text.
-            weights = {
-                "SVM": 0.40,       # Strongest textual feature classifier
-                "NB":  0.30,       # High recall for spam/smishing tokens
-                "RF":  0.15,       # Structural metadata support
-                "XGB_Base": 0.15   # Sequential boosting metadata support
-            }
-
-            # Compute the mathematically secure joint probability score
-            final_probability = (
-                (probs["SVM"] * weights["SVM"]) +
-                (probs["NB"] * weights["NB"]) +
-                (probs["RF"] * weights["RF"]) +
-                (probs["XGB_Base"] * weights["XGB_Base"])
-            )
-
-            # Establish standard production classification threshold
-            production_threshold = 0.50
-            final_prediction = 1 if final_probability >= production_threshold else 0
-
+            # Build the probability vector matrix matching your best_combo structure order
+            if expected_meta_features == 5:
+                new_meta_X = np.array([[probs["SVM"], probs["LR"], probs["NB"], probs["RF"], probs["XGB_Base"]]])
+            else:
+                # Dynamic fallback strategy to your default text-heavy top combination configurations
+                new_meta_X = np.array([[probs["SVM"], probs["LR"], probs["NB"]]])
+                if new_meta_X.shape[1] != expected_meta_features:
+                    full_stack_list = [probs["SVM"], probs["LR"], probs["NB"], probs["RF"], probs["XGB_Base"]]
+                    new_meta_X = np.array([full_stack_list[:expected_meta_features]])
+            
+            # Extract final ensemble classification outcomes
+            prediction = meta_clf.predict(new_meta_X)[0]
+            probability = meta_clf.predict_proba(new_meta_X)[0][1]
+            
             # ------------------------------------------------------------------
             # LAYER D: REPORT FORENSIC VERDICT TO INTERFACE VIEWPORTS
             # ------------------------------------------------------------------
             st.write("### 📜 Final System Verdict")
-            if final_prediction == 1:
+            if prediction == 1:
                 st.error(f"🚨 **CRITICAL RISK: SMISHING THREAT IDENTIFIED**")
-                st.metric(label="Ensemble Consensus Threat Confidence Score",
-                          value=f"{final_probability * 100:.2f}%")
+                st.metric(label="Meta-Ensemble Threat Confidence Score", value=f"{probability * 100:.2f}%")
             else:
                 st.success(f"✅ **SECURE PROFILE: LEGITIMATE MESSAGING (HAM)**")
-                st.metric(label="Ensemble Consensus Safety Confidence Score",
-                          value=f"{(1 - final_probability) * 100:.2f}%")
+                st.metric(label="Meta-Ensemble Safety Confidence Score", value=f"{(1 - probability) * 100:.2f}%")
                 
             # Drop down inspection engine matrix diagnostic display for grading panel review
             with st.expander("📊 View Multi-Layer Stacking Diagnostic Metrics"):
@@ -191,7 +180,7 @@ if st.button("🛡️ Launch Multi-Layer Threat Scan"):
                     st.write(f"• Payload Length: {int(new_df['text_len'].iloc[0])} characters")
                     st.write(f"• Malicious URL Detected: {'Yes' if new_df['has_url'].iloc[0] == 1 else 'No'}")
                     st.write(f"• Urgency Keyword Match Hits: {int(new_df['urgency_score'].iloc[0])}")
-                    st.write(f"• Sender Node: {sender_cat.replace('_', ' ')}")
+                    st.write(f"• Sender Node: {new_df.filter(like='sc_').idxmax(axis=1).iloc[0].replace('sc_', '').replace('_', ' ')}")
                 with col2:
                     st.markdown("**Layer-1 Probabilities Output Stack:**")
                     st.write(f"• SVM (Text Engine): {probs['SVM']:.4f}")
