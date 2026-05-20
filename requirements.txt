@@ -1,0 +1,14 @@
+# Data Science & NLP Foundations
+pandas
+numpy
+scikit-learn
+nltk
+xgboost
+
+# App & Evaluation Interface
+streamlit
+notebook
+matplotlib
+seaborn
+pyyaml
+kagglehub
